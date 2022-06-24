@@ -1,0 +1,148 @@
+---
+title: "MM916_Project2_Solution"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+#Vodafone Stock Price Prediction
+#load the London Stock Exchange data set
+load("lse.RData")
+# print first rows of the London Stock Exchange data
+head(lse)
+
+#Exploration of the data
+#Checking Correlation
+cor(lse[,-(1:4)])
+par(mar = c(1, 1, 1, 1))
+#Removing SMT as it is most correlated with other variables more than 0.87
+lse<-lse[,-(8)]
+#removing SPX as it is highly correlated to EXPN but among these less correlated to VOD
+lse<-lse[,-(11)]
+#removing SVT as it is highly correlated to SSE but among these less correlated to VOD
+lse<-lse[,-(6)]
+#Trying to view by splitting the data
+splitdf<- lse[,-(1:4)]
+plot(splitdf[,-(12:25)])
+plot(splitdf[,c(1,12,13,14)])
+plot(splitdf[,-(2:14)])
+
+#Applying transformations as per plots displayed
+lse$STJ.sq <- lse$STJ^2
+lse$SDR.sq <- lse$SDR^2
+lse$SMIN.sq <- lse$SMIN^2
+lse$BA.sq <- lse$BA^2
+lse$PRU.sq <- lse$PRU^2
+
+#Model Selection
+#Leaps and bounds
+library(leaps)
+leap.mod <- leaps(lse[,-c(1,4:5)], lse$VOD,
+                  method="adjr2", nbest=5, names=names(lse)[-c(1,4:5)])
+leaps_res <- data.frame(adjr2=leap.mod$adjr2,
+                         size=leap.mod$size,
+                         leap.mod$which,
+                         row.names=NULL)
+# This table is quite large - the first few rows are:
+head(leaps_res)
+# base R
+plot(adjr2~size, data=leaps_res)
+# or ggplot
+library(ggplot2)
+ggplot(leaps_res) +
+  geom_point(aes(size, adjr2)) +
+  scale_x_continuous(breaks=1:14)
+leaps_res %>% filter(size==8)
+leaps_res %>% filter(size==9)
+leaps_res %>% filter(size==10)
+
+#fitting the models
+leaps8 <- lm(VOD ~ AUTO + SSE + AHT + ABDN + RMV + CPG + PRU + PRU.sq, data = lse)
+leaps9 <- lm(VOD ~ AUTO + SSE + AHT + ABDN + RMV + SMIN + CPG + PRU + PRU.sq, data = lse)
+leaps10 <- lm(VOD ~ Year + Month + EXPN + AUTO + RMV + ANTO + CPG + PRU + SDR + SDR.sq, data = lse)
+
+#fitting full model
+full <- lm(paste0("VOD~", paste(names(lse)[-(1:4)], collapse="+")), data=lse)
+intercept <- lm(VOD~1, data=lse)
+
+forwards <- step(intercept, scope=as.formula(paste("~", paste(names(lse)[-(1:4)], collapse="+"))), direction="forward")
+backwards <- step(full, scope=as.formula(paste("~", paste(names(lse)[-(1:4)], collapse="+"))), direction="backward")
+stepwise <- step(intercept, scope=as.formula(paste("~", paste(names(lse)[-(1:4)], collapse="+"))), direction="both")
+
+#Comparing and Choosing the best model
+CP_PRESS <- function(model, sigma_full){
+  res <- resid(model)
+  hat_mod <- hatvalues(model)
+  CP <- sum(res^2)/sigma_full + 2*length(coef(model)) - length(res)
+  PRESS <- sum(res^2/(1-hat_mod)^2)
+  16
+  list(Cp=CP, PRESS=PRESS)
+}
+sigma_q <- summary(full)$sigma^2
+size8_stat <- CP_PRESS(leaps8, sigma_q)
+size9_stat <- CP_PRESS(leaps9, sigma_q)
+size10_stat <- CP_PRESS(leaps10, sigma_q)
+fwd_stat <- CP_PRESS(forwards, sigma_q)
+bk_stat <- CP_PRESS(backwards, sigma_q)
+step_stat <- CP_PRESS(stepwise, sigma_q)
+
+#from the comparisons choosing stepwise model
+#ploting the model
+par(mfrow=c(2,2), mar=c(4.5,4,2,2))
+plot(stepwise)
+
+#splitting to check pair plots as too many columns
+pairs(data.frame(resid(stepwise),lse[,-c(4:30)]))
+pairs(data.frame(resid(stepwise),lse[,-c(1:20,31:36)]))
+pairs(data.frame(resid(stepwise),lse[,-c(1:10,21:36)]))
+pairs(data.frame(resid(stepwise),lse[,c(6:10)]))
+
+#plot(resid(stepwise)~Month, data=lse)
+#plot(resid(stepwise)~ENT, data=lse)
+
+#boxcox transformation
+library(MASS)
+par(mfrow=c(1,1))
+boxcox(stepwise, plotit=TRUE,lambda = seq(0.5, 3.5, by = 0.1))
+
+#Lamda is greater than 2 so no more transformations required
+
+#Predictions
+# Function must be called predict_VOD and have these arguments
+predict_VOD <- function (lse, newdata){
+
+  # Fit a model 
+  VOD.lm <- lm(VOD ~ ABDN + BATS + AHT + SSE + PRU.sq + BA + RMV + 
+                 AUTO + CPG + ANTO + EXPN + BA.sq + SMIN + PRU + TSCO + STJ + 
+                 LLOY + ABF + SDR + RTO + MGGT + STJ.sq + WTB, data = lse)
+  
+  # Extract and return the model predictions on the new data set
+  predictions <- predict(VOD.lm, newdata = newdata)
+  return(predictions)
+}
+
+testDataset <- data.frame(lse[c(1:10),-c(1:5)])
+predictionDataset <- predict_VOD(lse,testDataset)
+
